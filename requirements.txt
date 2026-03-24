@@ -1,0 +1,7 @@
+streamlit
+streamlit[pdf]
+pandas
+requests 
+pymupdf 
+openpyxl
+selenium
