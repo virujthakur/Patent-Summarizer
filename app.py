@@ -1,20 +1,18 @@
 import io
-import os
 import zipfile
 
 import pandas as pd
 import requests
 import streamlit as st
 
+from db import get_patent_record, init_db, upsert_patent_record
 from functions import (
+    build_retrieval_payload,
     download_pdf,
     extract_text,
     get_pdf_link,
     normalize_url,
     patent_id_from_url,
-    patent_paths,
-    read_text_file,
-    save_text_file,
     summarize_text,
 )
 
@@ -104,6 +102,14 @@ def check_ollama():
         return False
 
 
+def check_database():
+    try:
+        init_db()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
 def parse_urls_from_excel(file_obj):
     df = pd.read_excel(file_obj)
     if "url" not in df.columns:
@@ -117,41 +123,45 @@ def parse_urls_from_excel(file_obj):
 
 def process_patent_url(url, model_name, force_reprocess=False):
     patent_id = patent_id_from_url(url)
-    paths = patent_paths(patent_id)
+    existing = get_patent_record(patent_id)
 
     if (
         not force_reprocess
-        and os.path.exists(paths["pdf"])
-        and os.path.exists(paths["text"])
-        and os.path.exists(paths["summary"])
+        and existing
+        and existing.get("pdf_data")
+        and existing.get("text_content")
+        and existing.get("summary")
     ):
         return {
             "status": "cached",
             "url": url,
             "patent_id": patent_id,
-            "pdf_path": paths["pdf"],
-            "text_path": paths["text"],
-            "summary_path": paths["summary"],
-            "summary": read_text_file(paths["summary"]),
+            "summary": existing.get("summary", ""),
         }
 
     pdf_url = get_pdf_link(url)
-    download_pdf(pdf_url, paths["pdf"])
-    text = extract_text(paths["pdf"])
+    pdf_bytes = download_pdf(pdf_url)
+    text = extract_text(pdf_bytes=pdf_bytes)
     if not text.strip():
         raise ValueError("Extracted text is empty")
 
     summary = summarize_text(text, model=model_name)
-    save_text_file(paths["text"], text)
-    save_text_file(paths["summary"], summary)
+    chunks, embeddings = build_retrieval_payload(text)
+
+    upsert_patent_record(
+        patent_id=patent_id,
+        url=url,
+        pdf_data=pdf_bytes,
+        text_content=text,
+        summary=summary,
+        chunks=chunks,
+        embeddings=embeddings,
+    )
 
     return {
         "status": "done",
         "url": url,
         "patent_id": patent_id,
-        "pdf_path": paths["pdf"],
-        "text_path": paths["text"],
-        "summary_path": paths["summary"],
         "summary": summary,
     }
 
@@ -160,9 +170,14 @@ def create_pdf_zip(results):
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for item in results:
-            pdf_path = item.get("pdf_path")
-            if pdf_path and os.path.exists(pdf_path):
-                archive.write(pdf_path, arcname=f"{item['patent_id']}.pdf")
+            patent_id = item.get("patent_id")
+            if not patent_id:
+                continue
+
+            record = get_patent_record(patent_id)
+            pdf_bytes = record.get("pdf_data") if record else None
+            if pdf_bytes:
+                archive.writestr(f"{patent_id}.pdf", pdf_bytes)
     zip_buffer.seek(0)
     return zip_buffer
 
@@ -181,7 +196,10 @@ with st.container():
     st.markdown("</div>", unsafe_allow_html=True)
 
 if process_clicked and uploaded_file is not None:
-    if not check_ollama():
+    db_ok, db_error = check_database()
+    if not db_ok:
+        st.error(f"Database connection failed: {db_error}")
+    elif not check_ollama():
         st.error("Ollama is not reachable at localhost:11434. Start Ollama and retry.")
     else:
         try:

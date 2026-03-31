@@ -1,8 +1,7 @@
-import os
-
 import streamlit as st
 
-from functions import chat_with_patent, patent_paths, read_text_file
+from db import get_patent_record, init_db
+from functions import chat_with_patent
 
 st.set_page_config(layout="wide", page_title="Patent Workspace", initial_sidebar_state="collapsed")
 
@@ -24,6 +23,12 @@ st.markdown(
 results = st.session_state.get("results", [])
 if not results:
     st.switch_page("app.py")
+
+try:
+    init_db()
+except Exception as exc:
+    st.error(f"Database connection failed: {exc}")
+    st.stop()
 
 if "chat_histories" not in st.session_state:
     st.session_state["chat_histories"] = {}
@@ -155,24 +160,31 @@ st.session_state["selected_patent_index"] = selected_index
 
 selected = results[selected_index]
 patent_id = selected["patent_id"]
-pdf_path = os.path.abspath(selected["pdf_path"])
-text_path = selected["text_path"]
+record = get_patent_record(patent_id)
+
+if not record:
+    st.error("No patent record found in database.")
+    st.stop()
+
+pdf_bytes = record.get("pdf_data")
+patent_text = record.get("text_content") or ""
+summary_text = selected.get("summary") or record.get("summary") or "No summary available."
+stored_chunks = record.get("chunks")
+stored_embeddings = record.get("embeddings")
 
 st.caption(selected["url"])
 
 tabs = st.tabs(["PDF", "Summary", "Chat"])
 
 with tabs[0]:
-    if not os.path.exists(pdf_path):
-        st.error(f"PDF not found: {pdf_path}")
+    if not pdf_bytes:
+        st.error("PDF not found in database for this patent.")
     else:
-        with open(pdf_path, "rb") as handle:
-            pdf_bytes = handle.read()
         st.pdf(pdf_bytes)
 
 with tabs[1]:
     st.subheader("Summary")
-    st.markdown(selected.get("summary", "No summary available."))
+    st.markdown(summary_text)
 
 with tabs[2]:
     st.subheader("Chat With This Patent")
@@ -190,8 +202,8 @@ with tabs[2]:
 
     question = st.chat_input("Ask a question about this patent")
     if question:
-        if not os.path.exists(text_path):
-            st.error("No extracted text file found for this patent.")
+        if not patent_text.strip():
+            st.error("No extracted text found in database for this patent.")
         else:
             patent_history.append({"role": "user", "content": question})
             with st.chat_message("user"):
@@ -199,15 +211,13 @@ with tabs[2]:
 
             with st.chat_message("assistant"):
                 with st.spinner("Thinking over patent context..."):
-                    patent_text = read_text_file(text_path)
-                    paths = patent_paths(patent_id)
-                    answer, chunks = chat_with_patent(
+                    answer, chunks, _, _ = chat_with_patent(
                         question=question,
                         patent_text=patent_text,
-                        index_path=paths["index"],
-                        chunks_path=paths["chunks"],
                         history=patent_history,
                         model=st.session_state["chat_model"],
+                        chunks=stored_chunks,
+                        embeddings=stored_embeddings,
                     )
                     st.write(answer)
                     with st.expander("Retrieved context"):

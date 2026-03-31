@@ -1,17 +1,12 @@
 import hashlib
-import json
-import os
 import re
 import time
-from pathlib import Path
 
 import fitz  # PyMuPDF
 import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-
-DATA_ROOT = Path("data") / "patents"
 
 
 def normalize_url(url):
@@ -23,43 +18,25 @@ def patent_id_from_url(url):
     return f"pat_{digest}"
 
 
-def get_patent_dir(patent_id):
-    patent_dir = DATA_ROOT / patent_id
-    patent_dir.mkdir(parents=True, exist_ok=True)
-    return patent_dir
-
-
-def patent_paths(patent_id):
-    patent_dir = get_patent_dir(patent_id)
-    return {
-        "dir": str(patent_dir),
-        "pdf": str(patent_dir / "document.pdf"),
-        "text": str(patent_dir / "document.txt"),
-        "summary": str(patent_dir / "summary.txt"),
-        "chunks": str(patent_dir / "chunks.json"),
-        "index": str(patent_dir / "index.json"),
-        "meta": str(patent_dir / "metadata.json"),
-    }
-
-
-def save_text_file(path, content):
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(content)
-
-
-def read_text_file(path):
-    with open(path, "r", encoding="utf-8") as handle:
-        return handle.read()
-
-
-def download_pdf(url, filename):
+def download_pdf(url, filename=None):
     response = requests.get(url, timeout=60)
     response.raise_for_status()
-    with open(filename, "wb") as handle:
-        handle.write(response.content)
+    pdf_bytes = response.content
+    if filename:
+        with open(filename, "wb") as handle:
+            handle.write(pdf_bytes)
+    return pdf_bytes
 
 
-def extract_text(pdf_path):
+def extract_text(pdf_path=None, pdf_bytes=None):
+    if pdf_bytes is not None:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            pages = [page.get_text() for page in doc]
+        return "\n".join(pages).strip()
+
+    if not pdf_path:
+        raise ValueError("Either pdf_path or pdf_bytes must be provided")
+
     with fitz.open(pdf_path) as doc:
         pages = [page.get_text() for page in doc]
     return "\n".join(pages).strip()
@@ -102,24 +79,10 @@ def _cosine_sparse(a_vec, b_vec):
     return dot / (a_norm * b_norm)
 
 
-def build_retrieval_index(text, index_path, chunks_path):
+def build_retrieval_payload(text):
     chunks = chunk_text(text)
     embeddings = [_simple_embed(chunk) for chunk in chunks]
-    with open(chunks_path, "w", encoding="utf-8") as handle:
-        json.dump(chunks, handle, ensure_ascii=True, indent=2)
-    with open(index_path, "w", encoding="utf-8") as handle:
-        json.dump(embeddings, handle, ensure_ascii=True)
     return chunks, embeddings
-
-
-def ensure_retrieval_index(text, index_path, chunks_path):
-    if os.path.exists(index_path) and os.path.exists(chunks_path):
-        with open(chunks_path, "r", encoding="utf-8") as handle:
-            chunks = json.load(handle)
-        with open(index_path, "r", encoding="utf-8") as handle:
-            embeddings = json.load(handle)
-        return chunks, embeddings
-    return build_retrieval_index(text, index_path, chunks_path)
 
 
 def retrieve_chunks(question, chunks, embeddings, top_k=4):
@@ -181,9 +144,18 @@ This invention addresses discomfort and performance issues caused by the initial
     return chat_ollama(messages, model=model, temperature=0.1)
 
 
-def chat_with_patent(question, patent_text, index_path, chunks_path, history=None, model="llama3:8b"):
+def chat_with_patent(
+    question,
+    patent_text,
+    history=None,
+    model="llama3:8b",
+    chunks=None,
+    embeddings=None,
+):
     history = history or []
-    chunks, embeddings = ensure_retrieval_index(patent_text, index_path, chunks_path)
+    if chunks is None or embeddings is None:
+        chunks, embeddings = build_retrieval_payload(patent_text)
+
     relevant_chunks = retrieve_chunks(question, chunks, embeddings, top_k=4)
 
     context = "\n\n".join(
@@ -219,7 +191,7 @@ def chat_with_patent(question, patent_text, index_path, chunks_path, history=Non
         messages = [system_message] + history_messages + messages[1:]
 
     answer = chat_ollama(messages, model=model, temperature=0.0, top_p=0.85)
-    return answer, relevant_chunks
+    return answer, relevant_chunks, chunks, embeddings
 
 
 def get_pdf_link(url):
