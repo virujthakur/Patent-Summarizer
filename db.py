@@ -30,6 +30,28 @@ class PatentRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class UserAccount(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_subject: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserPatentAccess(Base):
+    __tablename__ = "user_patent_access"
+
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
+    patent_id: Mapped[str] = mapped_column(ForeignKey("patents.patent_id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class PatentChunk(Base):
     __tablename__ = "patent_chunks"
 
@@ -77,6 +99,7 @@ def get_engine():
 
 @lru_cache(maxsize=1)
 def get_session_maker():
+    init_db()
     return sessionmaker(bind=get_engine(), autoflush=False, autocommit=False, expire_on_commit=False)
 
 
@@ -102,6 +125,94 @@ def _to_payload(record: PatentRecord | None):
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+def _user_to_payload(record: UserAccount | None):
+    if record is None:
+        return None
+
+    return {
+        "user_id": record.user_id,
+        "provider": record.provider,
+        "provider_subject": record.provider_subject,
+        "email": record.email,
+        "display_name": record.display_name,
+        "avatar_url": record.avatar_url,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def upsert_user_from_profile(profile):
+    Session = get_session_maker()
+    with Session() as session:
+        now = _now_utc()
+        record = session.get(UserAccount, profile["user_id"])
+        if record is None:
+            record = UserAccount(
+                user_id=profile["user_id"],
+                provider=profile.get("provider", "unknown"),
+                provider_subject=profile.get("provider_subject", profile["user_id"]),
+                created_at=now,
+                updated_at=now,
+            )
+
+        record.provider = profile.get("provider", record.provider)
+        record.provider_subject = profile.get("provider_subject", record.provider_subject)
+        record.email = profile.get("email") or record.email
+        record.display_name = profile.get("display_name") or record.display_name
+        record.avatar_url = profile.get("avatar_url") or record.avatar_url
+        record.updated_at = now
+
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return _user_to_payload(record)
+
+
+def grant_patent_access(owner_user_id, patent_id):
+    Session = get_session_maker()
+    with Session() as session:
+        now = _now_utc()
+        record = session.get(UserPatentAccess, (owner_user_id, patent_id))
+        if record is None:
+            record = UserPatentAccess(
+                owner_user_id=owner_user_id,
+                patent_id=patent_id,
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            record.updated_at = now
+
+        session.add(record)
+        session.commit()
+        return True
+
+
+def user_has_patent_access(owner_user_id, patent_id):
+    Session = get_session_maker()
+    with Session() as session:
+        count = (
+            session.query(UserPatentAccess)
+            .filter(UserPatentAccess.owner_user_id == owner_user_id)
+            .filter(UserPatentAccess.patent_id == patent_id)
+            .count()
+        )
+        return count > 0
+
+
+def list_user_patent_records(owner_user_id):
+    Session = get_session_maker()
+    with Session() as session:
+        rows = (
+            session.query(PatentRecord)
+            .join(UserPatentAccess, UserPatentAccess.patent_id == PatentRecord.patent_id)
+            .filter(UserPatentAccess.owner_user_id == owner_user_id)
+            .order_by(PatentRecord.updated_at.desc())
+            .all()
+        )
+        return [_to_payload(row) for row in rows]
 
 
 def get_patent_record(patent_id):

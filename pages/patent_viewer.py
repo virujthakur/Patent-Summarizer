@@ -1,6 +1,7 @@
 import streamlit as st
 
-from db import get_patent_record, init_db, search_patent_chunks
+from auth import get_current_user, render_auth_gate, sign_out
+from db import get_patent_record, init_db, search_patent_chunks, user_has_patent_access
 from functions import chat_with_patent, embed_text_dense
 
 st.set_page_config(layout="wide", page_title="Patent Workspace", initial_sidebar_state="collapsed")
@@ -23,6 +24,11 @@ st.markdown(
 results = st.session_state.get("results", [])
 if not results:
     st.switch_page("app.py")
+
+current_user = get_current_user()
+if not current_user:
+    render_auth_gate()
+    st.stop()
 
 try:
     init_db()
@@ -160,6 +166,11 @@ st.session_state["selected_patent_index"] = selected_index
 
 selected = results[selected_index]
 patent_id = selected["patent_id"]
+
+if not user_has_patent_access(current_user["user_id"], patent_id):
+    st.error("You do not have access to this patent.")
+    st.stop()
+
 record = get_patent_record(patent_id)
 
 if not record:
@@ -171,6 +182,12 @@ patent_text = record.get("text_content") or ""
 summary_text = selected.get("summary") or record.get("summary") or "No summary available."
 
 st.caption(selected["url"])
+st.caption(f"Signed in as {current_user.get('display_name') or current_user.get('email') or current_user['user_id']}")
+
+signout_col, _ = st.columns([1, 6])
+with signout_col:
+    if st.button("Sign out", use_container_width=True):
+        sign_out(redirect_to="app.py")
 
 tabs = st.tabs(["PDF", "Summary", "Chat"])
 
