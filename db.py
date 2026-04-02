@@ -39,6 +39,7 @@ class UserAccount(Base):
     email: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    theme_preference: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -108,6 +109,8 @@ def init_db():
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference VARCHAR(16)"))
 
 
 def _to_payload(record: PatentRecord | None):
@@ -138,6 +141,7 @@ def _user_to_payload(record: UserAccount | None):
         "email": record.email,
         "display_name": record.display_name,
         "avatar_url": record.avatar_url,
+        "theme_preference": record.theme_preference,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
@@ -162,12 +166,40 @@ def upsert_user_from_profile(profile):
         record.email = profile.get("email") or record.email
         record.display_name = profile.get("display_name") or record.display_name
         record.avatar_url = profile.get("avatar_url") or record.avatar_url
+        if profile.get("theme_preference"):
+            record.theme_preference = profile.get("theme_preference")
         record.updated_at = now
 
         session.add(record)
         session.commit()
         session.refresh(record)
         return _user_to_payload(record)
+
+
+def get_user_theme_preference(user_id):
+    Session = get_session_maker()
+    with Session() as session:
+        record = session.get(UserAccount, user_id)
+        if not record:
+            return None
+        return record.theme_preference
+
+
+def set_user_theme_preference(user_id, theme_preference):
+    if theme_preference not in {"light", "dark"}:
+        raise ValueError("theme_preference must be 'light' or 'dark'")
+
+    Session = get_session_maker()
+    with Session() as session:
+        record = session.get(UserAccount, user_id)
+        if not record:
+            return False
+
+        record.theme_preference = theme_preference
+        record.updated_at = _now_utc()
+        session.add(record)
+        session.commit()
+        return True
 
 
 def grant_patent_access(owner_user_id, patent_id):

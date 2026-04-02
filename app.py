@@ -25,77 +25,9 @@ from functions import (
     patent_id_from_url,
     summarize_text,
 )
-from db import has_patent_chunks, replace_patent_chunks
+from ui_theme import get_active_theme, inject_theme_css, render_theme_toggle
 
 st.set_page_config(layout="wide", page_title="Patent Studio")
-
-st.markdown(
-    """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500&display=swap');
-
-:root {
-  --paper: #f8f6ef;
-  --ink: #0e1726;
-  --coral: #f15b42;
-  --teal: #0b6e79;
-}
-
-.stApp {
-  font-family: 'IBM Plex Sans', sans-serif;
-  background:
-    radial-gradient(circle at 8% 12%, rgba(241, 91, 66, 0.2), transparent 30%),
-    radial-gradient(circle at 85% 10%, rgba(11, 110, 121, 0.2), transparent 35%),
-    linear-gradient(150deg, #f8f6ef 20%, #edf6f8 100%);
-  color: var(--ink);
-}
-
-[data-testid="stSidebar"] {
-    display: none;
-}
-
-[data-testid="collapsedControl"] {
-    display: none;
-}
-
-header[data-testid="stHeader"] {
-    display: none;
-}
-
-[data-testid="stToolbar"] {
-    display: none;
-}
-
-[data-testid="stDecoration"] {
-    display: none;
-}
-
-[data-testid="stStatusWidget"] {
-    display: none;
-}
-
-#MainMenu {
-    visibility: hidden;
-}
-
-h1, h2, h3 {
-  font-family: 'Space Grotesk', sans-serif;
-  letter-spacing: -0.02em;
-}
-
-.card {
-  border: 1px solid rgba(14, 23, 38, 0.12);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.65);
-  padding: 14px;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-st.title("Patent Studio")
-st.caption("Upload Excel links, download patents locally, auto-summarize, and open each patent for deep Q&A.")
 
 if "results" not in st.session_state:
     st.session_state["results"] = []
@@ -138,23 +70,34 @@ def load_results_for_user(user_id):
 
 current_user = get_current_user()
 if not current_user:
+    inject_theme_css(get_active_theme())
     render_auth_gate()
     st.stop()
 
 upsert_user_from_profile(current_user)
+inject_theme_css(get_active_theme(current_user))
 
 if st.session_state.get("auth_loaded_user_id") != current_user["user_id"]:
     st.session_state["results"] = load_results_for_user(current_user["user_id"])
     st.session_state["failed"] = []
     st.session_state["auth_loaded_user_id"] = current_user["user_id"]
 
-st.caption(f"Signed in as {current_user.get('display_name') or current_user.get('email') or current_user['user_id']}")
+header_left, header_right = st.columns([4.8, 2.4])
+with header_left:
+    st.title("Patent Studio")
+    st.caption("Upload Excel links, download patents locally, auto-summarize, and open each patent for deep Q&A.")
 
-signout_col, _ = st.columns([1, 6])
-with signout_col:
-    if st.button("Sign out", use_container_width=True):
-        sign_out()
-        st.rerun()
+with header_right:
+    st.markdown(
+        f"<div style='text-align:right; color: var(--muted); margin-top: 0.35rem;'>Signed in as {current_user.get('display_name') or current_user.get('email') or current_user['user_id']}</div>",
+        unsafe_allow_html=True,
+    )
+    control_left, control_right = st.columns([1, 1])
+    with control_left:
+        render_theme_toggle(current_user=current_user, key="theme_toggle_app")
+    with control_right:
+        if st.button("Sign out", use_container_width=True):
+            sign_out(redirect_to="app.py")
 
 
 def parse_urls_from_excel(file_obj):

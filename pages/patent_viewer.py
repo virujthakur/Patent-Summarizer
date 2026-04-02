@@ -3,23 +3,9 @@ import streamlit as st
 from auth import get_current_user, render_auth_gate, sign_out
 from db import get_patent_record, init_db, search_patent_chunks, user_has_patent_access
 from functions import chat_with_patent, embed_text_dense
+from ui_theme import get_active_theme, inject_theme_css, render_theme_toggle
 
 st.set_page_config(layout="wide", page_title="Patent Workspace", initial_sidebar_state="collapsed")
-
-st.markdown(
-    """
-<style>
-[data-testid="stSidebar"] {
-  display: none !important;
-}
-
-[data-testid="collapsedControl"] {
-  display: none !important;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
 
 results = st.session_state.get("results", [])
 if not results:
@@ -27,8 +13,11 @@ if not results:
 
 current_user = get_current_user()
 if not current_user:
+    inject_theme_css(get_active_theme())
     render_auth_gate()
     st.stop()
+
+inject_theme_css(get_active_theme(current_user))
 
 try:
     init_db()
@@ -51,85 +40,22 @@ if "viewer_select_index_dropdown" not in st.session_state:
 def on_patent_change():
     st.session_state["selected_patent_index"] = st.session_state["viewer_select_index_dropdown"]
 
-st.markdown(
-    """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500&display=swap');
+top_left, top_right = st.columns([4.8, 2.4])
+with top_left:
+    st.title("Patent Workspace")
+    st.caption("Top navigation")
 
-.stApp {
-    font-family: 'IBM Plex Sans', sans-serif;
-    background:
-        radial-gradient(circle at 8% 12%, rgba(241, 91, 66, 0.2), transparent 30%),
-        radial-gradient(circle at 85% 10%, rgba(11, 110, 121, 0.2), transparent 35%),
-        linear-gradient(150deg, #f8f6ef 20%, #edf6f8 100%);
-    color: #0e1726;
-}
-
-h1, h2, h3 {
-    font-family: 'Space Grotesk', sans-serif;
-    letter-spacing: -0.02em;
-}
-
-[data-testid="stSidebar"] {
-  display: none;
-}
-
-[data-testid="collapsedControl"] {
-  display: none;
-}
-
-header[data-testid="stHeader"] {
-    display: none;
-}
-
-[data-testid="stToolbar"] {
-    display: none;
-}
-
-[data-testid="stDecoration"] {
-    display: none;
-}
-
-[data-testid="stStatusWidget"] {
-    display: none;
-}
-
-#MainMenu {
-    visibility: hidden;
-}
-
-div[data-testid="stButton"] button[kind="primary"] {
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  border-radius: 999px;
-  padding: 0.45rem 0.9rem;
-}
-
-div[data-testid="stVerticalBlockBorderWrapper"] {
-  background: rgba(255, 255, 255, 0.82);
-  border-radius: 16px;
-  box-shadow: 0 8px 22px rgba(14, 23, 38, 0.08);
-}
-
-.top-nav-label {
-  font-size: 0.9rem;
-  font-weight: 700;
-  margin-bottom: 0.35rem;
-}
-
-@media (max-width: 980px) {
-  .top-nav-label {
-    margin-top: 0.4rem;
-  }
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-
-st.title("Patent Workspace")
-st.caption("Top navigation")
+with top_right:
+    st.markdown(
+        f"<div style='text-align:right; color: var(--muted); margin-top: 0.35rem;'>Signed in as {current_user.get('display_name') or current_user.get('email') or current_user['user_id']}</div>",
+        unsafe_allow_html=True,
+    )
+    control_left, control_right = st.columns([1, 1])
+    with control_left:
+        render_theme_toggle(current_user=current_user, key="theme_toggle_viewer")
+    with control_right:
+        if st.button("Sign out", use_container_width=True):
+            sign_out(redirect_to="app.py")
 
 with st.container(border=True):
     nav_left, nav_mid, nav_right = st.columns([1.2, 3.8, 1.4])
@@ -182,12 +108,6 @@ patent_text = record.get("text_content") or ""
 summary_text = selected.get("summary") or record.get("summary") or "No summary available."
 
 st.caption(selected["url"])
-st.caption(f"Signed in as {current_user.get('display_name') or current_user.get('email') or current_user['user_id']}")
-
-signout_col, _ = st.columns([1, 6])
-with signout_col:
-    if st.button("Sign out", use_container_width=True):
-        sign_out(redirect_to="app.py")
 
 tabs = st.tabs(["PDF", "Summary", "Chat"])
 
