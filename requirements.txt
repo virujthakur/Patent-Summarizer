@@ -5,3 +5,9 @@ requests
 pymupdf 
 openpyxl
 selenium
+sqlalchemy
+psycopg2-binary
+python-dotenv
+pgvector
+sentence-transformers
+torchvision

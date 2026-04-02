@@ -1,0 +1,37 @@
+sequenceDiagram
+    participant User
+    participant patent_viewer
+    participant functions.py
+    participant Storage
+    participant Ollama
+
+    User->>patent_viewer: Select patent + Go to Chat tab
+
+    User->>patent_viewer: Type question
+    patent_viewer->>functions.py: chat_with_patent(question, patent_text, ...)
+
+    functions.py->>functions.py: ensure_retrieval_index()
+    alt Index exists
+        Storage-->>functions.py: Load chunks.json + index.json
+    else Build new
+        functions.py->>functions.py: chunk_text
+        functions.py->>functions.py: _simple_embed each chunk
+        functions.py->>Storage: Save chunks.json + index.json
+    end
+
+    functions.py->>functions.py: _simple_embed(question)
+    functions.py->>functions.py: retrieve_chunks (cosine similarity)
+    functions.py->>functions.py: Get top 4 most relevant chunks
+
+    functions.py->>functions.py: Build message array:
+    functions.py->>functions.py: - system: answer from excerpts only
+    functions.py->>functions.py: - history: last 8 turns
+    functions.py->>functions.py: - user: question + context
+
+    functions.py->>Ollama: POST /api/chat with messages
+    Ollama-->>functions.py: LLM response (grounded, factual)
+
+    functions.py-->>patent_viewer: answer + relevant_chunks
+
+    patent_viewer->>User: Show answer
+    patent_viewer->>User: Expandable "Retrieved context" (4 chunks)

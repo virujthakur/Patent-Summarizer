@@ -1,9 +1,8 @@
 import hashlib
-import json
 import os
 import re
 import time
-from pathlib import Path
+from functools import lru_cache
 
 import fitz  # PyMuPDF
 import requests
@@ -11,7 +10,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-DATA_ROOT = Path("data") / "patents"
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 
 def normalize_url(url):
@@ -23,43 +22,25 @@ def patent_id_from_url(url):
     return f"pat_{digest}"
 
 
-def get_patent_dir(patent_id):
-    patent_dir = DATA_ROOT / patent_id
-    patent_dir.mkdir(parents=True, exist_ok=True)
-    return patent_dir
-
-
-def patent_paths(patent_id):
-    patent_dir = get_patent_dir(patent_id)
-    return {
-        "dir": str(patent_dir),
-        "pdf": str(patent_dir / "document.pdf"),
-        "text": str(patent_dir / "document.txt"),
-        "summary": str(patent_dir / "summary.txt"),
-        "chunks": str(patent_dir / "chunks.json"),
-        "index": str(patent_dir / "index.json"),
-        "meta": str(patent_dir / "metadata.json"),
-    }
-
-
-def save_text_file(path, content):
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(content)
-
-
-def read_text_file(path):
-    with open(path, "r", encoding="utf-8") as handle:
-        return handle.read()
-
-
-def download_pdf(url, filename):
+def download_pdf(url, filename=None):
     response = requests.get(url, timeout=60)
     response.raise_for_status()
-    with open(filename, "wb") as handle:
-        handle.write(response.content)
+    pdf_bytes = response.content
+    if filename:
+        with open(filename, "wb") as handle:
+            handle.write(pdf_bytes)
+    return pdf_bytes
 
 
-def extract_text(pdf_path):
+def extract_text(pdf_path=None, pdf_bytes=None):
+    if pdf_bytes is not None:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            pages = [page.get_text() for page in doc]
+        return "\n".join(pages).strip()
+
+    if not pdf_path:
+        raise ValueError("Either pdf_path or pdf_bytes must be provided")
+
     with fitz.open(pdf_path) as doc:
         pages = [page.get_text() for page in doc]
     return "\n".join(pages).strip()
@@ -81,57 +62,36 @@ def chunk_text(text, chunk_size=1400, overlap=220):
     return chunks
 
 
-def _simple_embed(text):
-    tokens = re.findall(r"[a-z0-9]+", text.lower())
-    vec = {}
-    for token in tokens:
-        vec[token] = vec.get(token, 0.0) + 1.0
-    return vec
+@lru_cache(maxsize=1)
+def get_embedding_model():
+    # Lazy import avoids loading heavy transformer stacks during app startup.
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(EMBEDDING_MODEL_NAME)
 
 
-def _cosine_sparse(a_vec, b_vec):
-    if not a_vec or not b_vec:
-        return 0.0
-    dot = 0.0
-    for token, a_val in a_vec.items():
-        dot += a_val * b_vec.get(token, 0.0)
-    a_norm = sum(v * v for v in a_vec.values()) ** 0.5
-    b_norm = sum(v * v for v in b_vec.values()) ** 0.5
-    if a_norm == 0.0 or b_norm == 0.0:
-        return 0.0
-    return dot / (a_norm * b_norm)
+def embed_texts_dense(texts):
+    if not texts:
+        return []
+
+    vectors = get_embedding_model().encode(
+        texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return vectors.tolist()
 
 
-def build_retrieval_index(text, index_path, chunks_path):
+def embed_text_dense(text):
+    vectors = embed_texts_dense([text])
+    return vectors[0] if vectors else []
+
+
+def build_retrieval_payload(text):
     chunks = chunk_text(text)
-    embeddings = [_simple_embed(chunk) for chunk in chunks]
-    with open(chunks_path, "w", encoding="utf-8") as handle:
-        json.dump(chunks, handle, ensure_ascii=True, indent=2)
-    with open(index_path, "w", encoding="utf-8") as handle:
-        json.dump(embeddings, handle, ensure_ascii=True)
+    embeddings = embed_texts_dense(chunks)
     return chunks, embeddings
-
-
-def ensure_retrieval_index(text, index_path, chunks_path):
-    if os.path.exists(index_path) and os.path.exists(chunks_path):
-        with open(chunks_path, "r", encoding="utf-8") as handle:
-            chunks = json.load(handle)
-        with open(index_path, "r", encoding="utf-8") as handle:
-            embeddings = json.load(handle)
-        return chunks, embeddings
-    return build_retrieval_index(text, index_path, chunks_path)
-
-
-def retrieve_chunks(question, chunks, embeddings, top_k=4):
-    query_vec = _simple_embed(question)
-    scored = []
-    for idx, emb in enumerate(embeddings):
-        scored.append((idx, _cosine_sparse(query_vec, emb)))
-    scored.sort(key=lambda pair: pair[1], reverse=True)
-    selected = [chunks[idx] for idx, score in scored[:top_k] if score > 0]
-    if not selected:
-        selected = chunks[: min(top_k, len(chunks))]
-    return selected
 
 
 def chat_ollama(messages, model="llama3:8b", temperature=0.1, top_p=0.9):
@@ -181,10 +141,19 @@ This invention addresses discomfort and performance issues caused by the initial
     return chat_ollama(messages, model=model, temperature=0.1)
 
 
-def chat_with_patent(question, patent_text, index_path, chunks_path, history=None, model="llama3:8b"):
+def chat_with_patent(
+    question,
+    patent_text,
+    history=None,
+    model="llama3:8b",
+    retrieved_chunks=None,
+):
     history = history or []
-    chunks, embeddings = ensure_retrieval_index(patent_text, index_path, chunks_path)
-    relevant_chunks = retrieve_chunks(question, chunks, embeddings, top_k=4)
+    if retrieved_chunks is None:
+        fallback_chunks = chunk_text(patent_text)
+        relevant_chunks = fallback_chunks[:4]
+    else:
+        relevant_chunks = retrieved_chunks
 
     context = "\n\n".join(
         [f"Excerpt {idx + 1}:\n{chunk}" for idx, chunk in enumerate(relevant_chunks)]
