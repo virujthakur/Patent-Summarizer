@@ -15,6 +15,7 @@ from functions import (
     patent_id_from_url,
     summarize_text,
 )
+from db import has_patent_chunks, replace_patent_chunks
 
 st.set_page_config(layout="wide", page_title="Patent Studio")
 
@@ -124,6 +125,7 @@ def parse_urls_from_excel(file_obj):
 def process_patent_url(url, model_name, force_reprocess=False):
     patent_id = patent_id_from_url(url)
     existing = get_patent_record(patent_id)
+    has_chunks = has_patent_chunks(patent_id)
 
     if (
         not force_reprocess
@@ -131,6 +133,7 @@ def process_patent_url(url, model_name, force_reprocess=False):
         and existing.get("pdf_data")
         and existing.get("text_content")
         and existing.get("summary")
+        and has_chunks
     ):
         return {
             "status": "cached",
@@ -154,9 +157,8 @@ def process_patent_url(url, model_name, force_reprocess=False):
         pdf_data=pdf_bytes,
         text_content=text,
         summary=summary,
-        chunks=chunks,
-        embeddings=embeddings,
     )
+    replace_patent_chunks(patent_id, chunks, embeddings)
 
     return {
         "status": "done",

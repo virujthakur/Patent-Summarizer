@@ -1,0 +1,61 @@
+graph TB
+    subgraph UI["Frontend Layer (Streamlit)"]
+        A["app.py<br/>(Home/Upload)"]
+        B["patent_viewer.py<br/>(Patent Workspace)"]
+    end
+
+    subgraph Core["Core Processing Layer"]
+        C["functions.py<br/>(All Utilities)"]
+    end
+
+    subgraph Processing["Processing Pipeline"]
+        P1["PDF Link Extraction<br/>(Selenium)"]
+        P2["PDF Download<br/>(requests)"]
+        P3["Text Extraction<br/>(PyMuPDF)"]
+        P4["Summarization<br/>(Ollama LLM)"]
+        P5["Chunking & Embedding<br/>(Sparse tokens)"]
+    end
+
+    subgraph Retrieval["RAG System"]
+        R1["Chunk Storage<br/>(JSON)"]
+        R2["Embedding Index<br/>(JSON)"]
+        R3["Semantic Retrieval<br/>(Cosine similarity)"]
+        R4["Chat with Patent<br/>(Ollama)"]
+    end
+
+    subgraph Storage["Local Storage"]
+        S1["data/patents/{id}/<br/>document.pdf"]
+        S2["data/patents/{id}/<br/>document.txt"]
+        S3["data/patents/{id}/<br/>summary.txt"]
+        S4["data/patents/{id}/<br/>chunks.json"]
+        S5["data/patents/{id}/<br/>index.json"]
+    end
+
+    subgraph External["External Services"]
+        E1["Ollama<br/>localhost:11434"]
+    end
+
+    A -->|Excel Upload| A
+    A -->|Process Patents| P1
+    A -->|Results| B
+
+    P1 -->|Patent URL| P2
+    P2 -->|PDF Binary| P3
+    P3 -->|Full Text| P4
+    P4 -->|Summary| P5
+    P5 -->|Chunks & Embeddings| S1
+    S4 -->|Chunks| R1
+    S5 -->|Embeddings| R2
+
+    B -->|View Patent| B
+    B -->|Question| R3
+    R3 -->|Retrieved Chunks| R4
+    R4 -->|Answer| B
+
+    R4 -->|API Call| E1
+    P4 -->|API Call| E1
+
+    S1 --> S2
+    S2 --> S3
+    S3 --> S4
+    S4 --> S5

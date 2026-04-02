@@ -1,0 +1,49 @@
+sequenceDiagram
+    participant User
+    participant app.py
+    participant functions.py
+    participant Selenium
+    participant Chrome
+    participant requests
+    participant Ollama
+    participant Storage
+
+    User->>app.py: Upload Excel + Click Process
+    app.py->>app.py: Parse Excel, get URLs
+
+    loop For each URL
+        app.py->>functions.py: process_patent_url(url)
+
+        alt Check Cache
+            functions.py->>Storage: Check if pdf/text/summary exist
+            Storage-->>functions.py: Found (cached=true)
+            functions.py-->>app.py: Return cached result
+        else Process New
+            functions.py->>functions.py: patent_id_from_url (SHA1 hash)
+            functions.py->>Selenium: get_pdf_link(url)
+
+            Selenium->>Chrome: Visit patent page
+            Chrome-->>Selenium: Page loaded
+            Selenium->>Chrome: Find PDF link XPath
+            Chrome-->>Selenium: URL found or click PDF button
+            Selenium-->>functions.py: Return PDF URL
+
+            functions.py->>requests: download_pdf(pdf_url)
+            requests-->>Storage: Save document.pdf
+
+            functions.py->>Storage: extract_text(pdf_path)
+            Storage-->>functions.py: Full patent text (10k-100k chars)
+
+            functions.py->>functions.py: chunk_text (1400 char chunks, 220 overlap)
+            functions.py->>functions.py: _simple_embed each chunk (sparse vectors)
+            functions.py->>Storage: Save chunks.json + index.json
+
+            functions.py->>Ollama: summarize_text (LLM call)
+            Ollama-->>functions.py: 1-paragraph summary
+            functions.py->>Storage: Save summary.txt
+
+            functions.py-->>app.py: Return result (done)
+        end
+    end
+
+    app.py->>User: Show results table + Download buttons

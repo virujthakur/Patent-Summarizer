@@ -1,12 +1,16 @@
 import hashlib
+import os
 import re
 import time
+from functools import lru_cache
 
 import fitz  # PyMuPDF
 import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 
 def normalize_url(url):
@@ -58,43 +62,36 @@ def chunk_text(text, chunk_size=1400, overlap=220):
     return chunks
 
 
-def _simple_embed(text):
-    tokens = re.findall(r"[a-z0-9]+", text.lower())
-    vec = {}
-    for token in tokens:
-        vec[token] = vec.get(token, 0.0) + 1.0
-    return vec
+@lru_cache(maxsize=1)
+def get_embedding_model():
+    # Lazy import avoids loading heavy transformer stacks during app startup.
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(EMBEDDING_MODEL_NAME)
 
 
-def _cosine_sparse(a_vec, b_vec):
-    if not a_vec or not b_vec:
-        return 0.0
-    dot = 0.0
-    for token, a_val in a_vec.items():
-        dot += a_val * b_vec.get(token, 0.0)
-    a_norm = sum(v * v for v in a_vec.values()) ** 0.5
-    b_norm = sum(v * v for v in b_vec.values()) ** 0.5
-    if a_norm == 0.0 or b_norm == 0.0:
-        return 0.0
-    return dot / (a_norm * b_norm)
+def embed_texts_dense(texts):
+    if not texts:
+        return []
+
+    vectors = get_embedding_model().encode(
+        texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return vectors.tolist()
+
+
+def embed_text_dense(text):
+    vectors = embed_texts_dense([text])
+    return vectors[0] if vectors else []
 
 
 def build_retrieval_payload(text):
     chunks = chunk_text(text)
-    embeddings = [_simple_embed(chunk) for chunk in chunks]
+    embeddings = embed_texts_dense(chunks)
     return chunks, embeddings
-
-
-def retrieve_chunks(question, chunks, embeddings, top_k=4):
-    query_vec = _simple_embed(question)
-    scored = []
-    for idx, emb in enumerate(embeddings):
-        scored.append((idx, _cosine_sparse(query_vec, emb)))
-    scored.sort(key=lambda pair: pair[1], reverse=True)
-    selected = [chunks[idx] for idx, score in scored[:top_k] if score > 0]
-    if not selected:
-        selected = chunks[: min(top_k, len(chunks))]
-    return selected
 
 
 def chat_ollama(messages, model="llama3:8b", temperature=0.1, top_p=0.9):
@@ -149,14 +146,14 @@ def chat_with_patent(
     patent_text,
     history=None,
     model="llama3:8b",
-    chunks=None,
-    embeddings=None,
+    retrieved_chunks=None,
 ):
     history = history or []
-    if chunks is None or embeddings is None:
-        chunks, embeddings = build_retrieval_payload(patent_text)
-
-    relevant_chunks = retrieve_chunks(question, chunks, embeddings, top_k=4)
+    if retrieved_chunks is None:
+        fallback_chunks = chunk_text(patent_text)
+        relevant_chunks = fallback_chunks[:4]
+    else:
+        relevant_chunks = retrieved_chunks
 
     context = "\n\n".join(
         [f"Excerpt {idx + 1}:\n{chunk}" for idx, chunk in enumerate(relevant_chunks)]
@@ -191,7 +188,7 @@ def chat_with_patent(
         messages = [system_message] + history_messages + messages[1:]
 
     answer = chat_ollama(messages, model=model, temperature=0.0, top_p=0.85)
-    return answer, relevant_chunks, chunks, embeddings
+    return answer, relevant_chunks
 
 
 def get_pdf_link(url):

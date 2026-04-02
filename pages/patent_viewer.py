@@ -1,7 +1,7 @@
 import streamlit as st
 
-from db import get_patent_record, init_db
-from functions import chat_with_patent
+from db import get_patent_record, init_db, search_patent_chunks
+from functions import chat_with_patent, embed_text_dense
 
 st.set_page_config(layout="wide", page_title="Patent Workspace", initial_sidebar_state="collapsed")
 
@@ -169,8 +169,6 @@ if not record:
 pdf_bytes = record.get("pdf_data")
 patent_text = record.get("text_content") or ""
 summary_text = selected.get("summary") or record.get("summary") or "No summary available."
-stored_chunks = record.get("chunks")
-stored_embeddings = record.get("embeddings")
 
 st.caption(selected["url"])
 
@@ -211,13 +209,19 @@ with tabs[2]:
 
             with st.chat_message("assistant"):
                 with st.spinner("Thinking over patent context..."):
-                    answer, chunks, _, _ = chat_with_patent(
+                    query_embedding = embed_text_dense(question)
+                    chunks = search_patent_chunks(
+                        patent_id=patent_id,
+                        query_embedding=query_embedding,
+                        top_k=4,
+                    )
+
+                    answer, chunks = chat_with_patent(
                         question=question,
                         patent_text=patent_text,
                         history=patent_history,
                         model=st.session_state["chat_model"],
-                        chunks=stored_chunks,
-                        embeddings=stored_embeddings,
+                        retrieved_chunks=chunks,
                     )
                     st.write(answer)
                     with st.expander("Retrieved context"):
