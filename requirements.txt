@@ -11,3 +11,4 @@ python-dotenv
 pgvector
 sentence-transformers
 torchvision
+supabase

@@ -5,7 +5,17 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from db import get_patent_record, init_db, upsert_patent_record
+from auth import get_current_user, render_auth_gate, sign_out
+from db import (
+    get_patent_record,
+    grant_patent_access,
+    has_patent_chunks,
+    init_db,
+    list_user_patent_records,
+    replace_patent_chunks,
+    upsert_patent_record,
+    upsert_user_from_profile,
+)
 from functions import (
     build_retrieval_payload,
     download_pdf,
@@ -15,7 +25,6 @@ from functions import (
     patent_id_from_url,
     summarize_text,
 )
-from db import has_patent_chunks, replace_patent_chunks
 
 st.set_page_config(layout="wide", page_title="Patent Studio")
 
@@ -111,6 +120,42 @@ def check_database():
         return False, str(exc)
 
 
+def load_results_for_user(user_id):
+    records = list_user_patent_records(user_id)
+    results = []
+    for record in records:
+        results.append(
+            {
+                "status": "stored",
+                "url": record["url"],
+                "patent_id": record["patent_id"],
+                "summary": record.get("summary", ""),
+            }
+        )
+    return results
+
+
+current_user = get_current_user()
+if not current_user:
+    render_auth_gate()
+    st.stop()
+
+upsert_user_from_profile(current_user)
+
+if st.session_state.get("auth_loaded_user_id") != current_user["user_id"]:
+    st.session_state["results"] = load_results_for_user(current_user["user_id"])
+    st.session_state["failed"] = []
+    st.session_state["auth_loaded_user_id"] = current_user["user_id"]
+
+st.caption(f"Signed in as {current_user.get('display_name') or current_user.get('email') or current_user['user_id']}")
+
+signout_col, _ = st.columns([1, 6])
+with signout_col:
+    if st.button("Sign out", use_container_width=True):
+        sign_out()
+        st.rerun()
+
+
 def parse_urls_from_excel(file_obj):
     df = pd.read_excel(file_obj)
     if "url" not in df.columns:
@@ -159,6 +204,7 @@ def process_patent_url(url, model_name, force_reprocess=False):
         summary=summary,
     )
     replace_patent_chunks(patent_id, chunks, embeddings)
+    grant_patent_access(current_user["user_id"], patent_id)
 
     return {
         "status": "done",
