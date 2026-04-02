@@ -25,6 +25,7 @@ from functions import (
     patent_id_from_url,
     summarize_text,
 )
+from db import has_patent_chunks, replace_patent_chunks
 
 st.set_page_config(layout="wide", page_title="Patent Studio")
 
