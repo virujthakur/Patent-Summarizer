@@ -8,11 +8,9 @@ A beautiful, locally-hosted patent analysis and Q&A application built with Strea
 - **📥 Auto-Download & Extract**: Automatically fetch PDF documents from patent links and extract full text
 - **✨ AI Summarization**: Generate concise patent summaries using local Ollama LLM (supports any Ollama model)
 - **💬 Patent Q&A Chat**: Ask questions about individual patents; responses are grounded in the patent text using semantic retrieval
-- **📁 Local Storage**: All downloaded PDFs, extracted text, and indexes stored locally in `data/patents/` folder
 - **⬇️ Export Options**: Download summaries as CSV or all PDFs as ZIP archive
 - **🎨 Beautiful UI**: Modern gradient background, top navigation, tabbed patent workspace
 - **🔄 Patent Switching**: Easy dropdown navigation between processed patents
-- **🚫 No Sidebar**: Clean interface with top navigation bar and prominent back button
 
 ## Project Structure
 
@@ -71,7 +69,7 @@ Patent Summarizer/
 
 5. **Start Ollama** (in a separate terminal):
    ```bash
-   ollama serve
+   ollama run llama3:8b  # or your chosen model
    ```
 
 6. **Run the app:**
@@ -148,7 +146,7 @@ User Question
     ↓
 Text Chunking (with overlap)
     ↓
-Sparse Vector Embedding (token-based)
+Vector Embedding using sentence transformer 
     ↓
 Semantic Retrieval (top-4 chunks)
     ↓
